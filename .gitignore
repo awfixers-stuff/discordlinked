@@ -1,7 +1,7 @@
 node_modules/
-!.env.example
-*.env
-.env.*
-.env*
+.env
 .pyc
 __pycache__
+
+# Unignore .env.example if it was implicitly ignored by .env
+!.env.example

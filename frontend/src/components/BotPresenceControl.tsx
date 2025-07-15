@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
 
 const BotPresenceControl = () => {
   const [status, setStatus] = useState('online');
@@ -38,14 +41,17 @@ const BotPresenceControl = () => {
   };
 
   return (
-    <div className="container mx-auto">
-      <h2 className="text-lg font-semibold mb-4">Bot Presence Control (Admin Only)</h2>
-      <div className="bg-white p-6 rounded-lg shadow">
+    <Card>
+      <CardHeader>
+        <CardTitle>Bot Presence Control</CardTitle>
+        <CardDescription>Update the bot's presence on Discord. This is an admin-only feature.</CardDescription>
+      </CardHeader>
+      <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="status" className="block text-sm font-medium text-gray-700">Status</label>
+          <div className="grid gap-2">
+            <Label htmlFor="status">Status</Label>
             <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-[180px]">
+              <SelectTrigger className="w-[280px]">
                 <SelectValue placeholder="Select a status" />
               </SelectTrigger>
               <SelectContent>
@@ -56,35 +62,37 @@ const BotPresenceControl = () => {
               </SelectContent>
             </Select>
           </div>
-          <div>
-            <label htmlFor="activityType" className="block text-sm font-medium text-gray-700">Activity Type</label>
+          <div className="grid gap-2">
+            <Label htmlFor="activityType">Activity Type</Label>
             <Select value={activityType} onValueChange={setActivityType}>
-              <SelectTrigger className="w-[180px]">
+              <SelectTrigger className="w-[280px]">
                 <SelectValue placeholder="Select an activity type" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="Playing">Playing</SelectItem>
                 <SelectItem value="Streaming">Streaming</SelectItem>
-                <SelectItem value="Listening">Listening</n>                <SelectItem value="Watching">Watching</SelectItem>
+                <SelectItem value="Listening">Listening</SelectItem>
+                <SelectItem value="Watching">Watching</SelectItem>
                 <SelectItem value="Competing">Competing</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          <div>
-            <label htmlFor="activityName" className="block text-sm font-medium text-gray-700">Activity Name</label>
-            <input
-              type="text"
+          <div className="grid gap-2">
+            <Label htmlFor="activityName">Activity Name</Label>
+            <Input
               id="activityName"
               value={activityName}
               onChange={(e) => setActivityName(e.target.value)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+              placeholder="What is the bot doing?"
             />
           </div>
-          <Button type="submit">Update Presence</Button>
-          {message && <p className="text-sm mt-2">{message}</p>}
         </form>
-      </div>
-    </div>
+      </CardContent>
+      <CardFooter className="border-t px-6 py-4">
+        <Button onClick={handleSubmit}>Update Presence</Button>
+        {message && <p className="text-sm ml-4">{message}</p>}
+      </CardFooter>
+    </Card>
   );
 };
 

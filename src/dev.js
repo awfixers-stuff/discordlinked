@@ -7,7 +7,6 @@ const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 const passport = require('passport');
 const DiscordStrategy = require('passport-discord').Strategy;
-const { ShardingManager } = require('discord.js');
 const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -38,77 +37,84 @@ if (process.env.SENTRY_ENABLED === 'true' && process.env.SENTRY_DSN) {
   app.use(Sentry.Handlers.tracingHandler());
 }
 
-// Sharding Manager setup
-const manager = new ShardingManager('./src/bot.js', {
-  token: process.env.DISCORD_TOKEN,
-  totalShards: 'auto',
+const { Client, GatewayIntentBits } = require('discord.js');
+
+// Discord Bot setup (single instance)
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
-manager.on('shardCreate', shard => {
-  console.log(`Launched shard ${shard.id}`);
-  shard.on('error', error => {
-    console.error(`Shard ${shard.id} encountered an error:`, error);
-    if (process.env.SENTRY_ENABLED === 'true' && process.env.SENTRY_DSN) {
-      Sentry.captureException(error, { tags: { shardId: shard.id } });
-    }
-  });
+client.once('ready', () => {
+  console.log(`Development Bot Ready! Logged in as ${client.user.tag}`);
+  if (process.env.SENTRY_ENABLED === 'true' && process.env.SENTRY_DSN) {
+    Sentry.captureMessage(`Development Bot Ready`);
+  }
 });
 
-manager.spawn();
+client.on('messageCreate', (message) => {
+  if (message.author.bot) return;
+  if (message.content === '!ping') {
+    message.reply('Pong!');
+  }
+});
 
-// Helper function to send messages to shards and get responses
+client.login(process.env.DISCORD_TOKEN);
+
+// Local sendToShard function for development
 async function sendToShard(guildId, message) {
-  // If guildId is null, broadcast to all shards (e.g., for presence updates)
-  if (guildId === null) {
-    const results = await manager.broadcastEval(async (c, { type, data }) => {
-      // This code runs on each shard
-      if (type === 'presenceUpdate') {
-        c.user.setPresence({
-          status: data.status,
-          activities: [{
-            name: data.activityName,
-            type: data.activityType,
-          }],
-        });
-        return { success: true };
-      }
-      // Add other broadcastable messages here if needed
-    }, { context: message });
-    return results;
+  // In dev mode, we directly call the client methods
+  if (message.type === 'presenceUpdate') {
+    client.user.setPresence({
+      status: message.data.status,
+      activities: [{
+        name: message.data.activityName,
+        type: message.data.activityType,
+      }],
+    });
+    return { success: true };
+  } else if (message.type === 'fetchGuild') {
+    return await client.guilds.fetch(message.data.guildId);
+  } else if (message.type === 'fetchGuilds') {
+    const guilds = await client.guilds.fetch();
+    return guilds.map(g => ({ id: g.id, name: g.name }));
+  } else if (message.type === 'fetchMembers') {
+    const guild = await client.guilds.fetch(message.data.guildId);
+    const members = await guild.members.fetch();
+    return members.map(member => ({
+      id: member.id,
+      username: member.user.username,
+      discriminator: member.user.discriminator,
+      tag: member.user.tag,
+      roles: member.roles.cache.map(role => ({ id: role.id, name: role.name })),
+    }));
+  } else if (message.type === 'fetchMember') {
+    const guild = await client.guilds.fetch(message.data.guildId);
+    return await guild.members.fetch(message.data.userId);
+  } else if (message.type === 'addRole') {
+    const guild = await client.guilds.fetch(message.data.guildId);
+    const member = await guild.members.fetch(message.data.userId);
+    const role = guild.roles.cache.get(message.data.roleId);
+    await member.roles.add(role);
+    return { success: true };
+  } else if (message.type === 'removeRole') {
+    const guild = await client.guilds.fetch(message.data.guildId);
+    const member = await guild.members.fetch(message.data.userId);
+    const role = guild.roles.cache.get(message.data.roleId);
+    await member.roles.remove(role);
+    return { success: true };
   }
-
-  const shardId = manager.shardIdForGuildId(guildId);
-  const shard = manager.shards.get(shardId);
-  if (!shard) {
-    throw new Error(`Shard for guild ${guildId} not found.`);
-  }
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error('Shard IPC timeout'));
-    }, 10000); // 10 seconds timeout
-
-    const listener = response => {
-      if (response.type === message.type + 'Success' && response.shardId === shardId) {
-        clearTimeout(timeout);
-        shard.removeListener('message', listener);
-        resolve(response.data);
-      } else if (response.type === message.type + 'Error' && response.shardId === shardId) {
-        clearTimeout(timeout);
-        shard.removeListener('message', listener);
-        reject(new Error(response.error));
-      }
-    };
-
-    shard.send(message);
-    shard.on('message', listener);
-  });
+  throw new Error('Unknown IPC message type in dev mode');
 }
 
 // Web Server setup
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL, // Allow requests only from your frontend
+  origin: process.env.FRONTEND_URL,
   credentials: true,
 }));
 app.use(express.json());
@@ -158,16 +164,14 @@ passport.use(new DiscordStrategy({
   async (accessToken, refreshToken, profile, done) => {
     try {
       const userGuilds = profile.guilds.map(g => g.id);
-      
-      // Fetch bot guilds from shards
-      const botGuilds = await manager.broadcastEval(c => c.guilds.cache.map(g => g.id));
-      const allBotGuilds = botGuilds.flat();
+      const botGuilds = await client.guilds.fetch(); // Directly fetch from the single client
+      const allBotGuilds = botGuilds.map(g => g.id);
 
       let hasAccess = false;
       for (const guildId of userGuilds) {
         if (allBotGuilds.includes(guildId)) {
           try {
-            const member = await sendToShard(guildId, { type: 'fetchMember', data: { guildId, userId: profile.id } });
+            const member = await client.guilds.cache.get(guildId).members.fetch(profile.id);
             const botAdminRoleId = process.env.BOT_ADMIN_ROLE_ID;
             const botReadonlyAdminRoleId = process.env.BOT_READONLY_ADMIN_ROLE_ID;
 
@@ -244,7 +248,7 @@ app.use('/api/stripe-webhook', stripeWebhookRoutes);
 const stripeApiRoutes = require('./routes/stripeApi');
 app.use('/api/stripe', ensureAuthenticated, stripeApiRoutes);
 
-// Pass manager to routes that need to interact with shards
+// Pass sendToShard to routes that need to interact with the bot
 const botRoutes = require('./routes/bot')(sendToShard);
 app.use('/api/bot', ensureAuthenticated, botRoutes);
 
@@ -258,14 +262,13 @@ app.get('/api/user', ensureAuthenticated, (req, res) => {
   res.json(req.user);
 });
 
-// The error handler must be before any other error middleware and after all controllers
+// Sentry error handler (optional for dev)
 if (process.env.SENTRY_ENABLED === 'true' && process.env.SENTRY_DSN) {
   app.use(Sentry.Handlers.errorHandler());
 }
 
 // Optional fallthrough error handler
 app.use(function onError(err, req, res, next) {
-  // The error id is attached to `res.sentry` to be returned to the client
   res.statusCode = 500;
   res.end(res.sentry + "\n");
 });
@@ -288,16 +291,16 @@ db.query('SELECT NOW()', (err, res) => {
 
 // Capture unhandled rejections and uncaught exceptions
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  console.error('Unhandled Rejection:', reason, promise);
   if (process.env.SENTRY_ENABLED === 'true' && process.env.SENTRY_DSN) {
     Sentry.captureException(reason);
   }
 });
 
 process.on('uncaughtException', (err, origin) => {
-  console.error('Caught exception:', err, 'Exception origin:', origin);
+  console.error('Uncaught Exception:', err, origin);
   if (process.env.SENTRY_ENABLED === 'true' && process.env.SENTRY_DSN) {
     Sentry.captureException(err);
   }
-  process.exit(1); // Exit to prevent further issues
+  process.exit(1);
 });
