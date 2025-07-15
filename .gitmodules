@@ -1,0 +1,3 @@
+[submodule "cloudconfig"]
+	path = cloudconfig
+	url = git@github.com:awfixers-stuff/cloudconfig
